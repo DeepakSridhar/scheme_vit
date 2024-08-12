@@ -172,21 +172,21 @@ def main(model=None) -> None:
     #                   f"Latency: N/A     ms| ")
     #         torch.cuda.synchronize()
 
-    # print("Latency Measurement Using PyTorch Benchmark...")
-    # num_threads = 1
-    # timer = benchmark.Timer(stmt="run_inference(model, input_tensor)",
-    #                         setup="from utils.benchmark import run_inference",
-    #                         globals={
-    #                             "model": model,
-    #                             "input_tensor": input_tensor
-    #                         },
-    #                         num_threads=num_threads,
-    #                         label="Latency Measurement",
-    #                         sub_label="torch.utils.benchmark.")
+    print("Latency Measurement Using PyTorch Benchmark...")
+    num_threads = 1
+    timer = benchmark.Timer(stmt="run_inference(model, input_tensor)",
+                            setup="from utils.benchmark import run_inference",
+                            globals={
+                                "model": model,
+                                "input_tensor": input_tensor
+                            },
+                            num_threads=num_threads,
+                            label="Latency Measurement",
+                            sub_label="torch.utils.benchmark.")
 
-    # profile_result = timer.timeit(num_repeats)
-    # # https://pytorch.org/docs/stable/_modules/torch/utils/benchmark/utils/common.html#Measurement
-    # print(f"Latency: {profile_result.mean * 1000:.5f} ms")
+    profile_result = timer.timeit(num_repeats)
+    # https://pytorch.org/docs/stable/_modules/torch/utils/benchmark/utils/common.html#Measurement
+    print(f"Latency: {profile_result.mean * 1000:.5f} ms")
 
 
 if __name__ == "__main__":
