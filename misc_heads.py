@@ -2364,7 +2364,7 @@ class Mlp(nn.Module):
     Implementation of MLP with 1*1 convolutions.
     Input: tensor with shape [B, C, H, W]
     """
-    def __init__(self, in_features, hidden_features=None, name='',
+    def __init__(self, in_features, hidden_features=None, name='', use_cca=False,
                  out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
         self.in_features = in_features
