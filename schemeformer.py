@@ -27,8 +27,8 @@ from timm.models.layers import DropPath, trunc_normal_
 from timm.models.registry import register_model
 
 
-from .misc_heads import Mlp
-from .mlp_heads import GroupNorm, PatchEmbed, LayerNormChannel, GroupLiteAttMlp, PartialGroupLiteAttMlp, GroupLiteSEMlp, ShuffleGroupLiteAttMlp, GroupLiteConvMlp, GroupLiteGCTAttMlp
+from misc_heads import Mlp
+from mlp_heads import GroupNorm, PatchEmbed, LayerNormChannel, GroupLiteAttMlp, PartialGroupLiteAttMlp, GroupLiteSEMlp, ShuffleGroupLiteAttMlp, GroupLiteConvMlp, GroupLiteGCTAttMlp
 
 try:
     from mmseg.models.builder import BACKBONES as seg_BACKBONES
