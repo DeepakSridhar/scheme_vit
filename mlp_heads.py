@@ -175,6 +175,50 @@ def group_max_interconnect(x, groups=4):
     return out, indices
 
 
+class PatchEmbed(nn.Module):
+    """
+    Patch Embedding that is implemented by a layer of conv. 
+    Input: tensor in shape [B, C, H, W]
+    Output: tensor in shape [B, C, H/stride, W/stride]
+    """
+    def __init__(self, patch_size=16, stride=16, padding=0, 
+                 in_chans=3, embed_dim=768, norm_layer=None):
+        super().__init__()
+        patch_size = to_2tuple(patch_size)
+        stride = to_2tuple(stride)
+        padding = to_2tuple(padding)
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, 
+                              stride=stride, padding=padding)
+        self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
+
+    def forward(self, x):
+        if isinstance(x, tuple):
+            x, _ = x
+        x = self.proj(x)
+        x = self.norm(x)
+        return x
+
+
+class LayerNormChannel(nn.Module):
+    """
+    LayerNorm only for Channel Dimension.
+    Input: tensor in shape [B, C, H, W]
+    """
+    def __init__(self, num_channels, eps=1e-05):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(num_channels))
+        self.bias = nn.Parameter(torch.zeros(num_channels))
+        self.eps = eps
+
+    def forward(self, x):
+        u = x.mean(1, keepdim=True)
+        s = (x - u).pow(2).mean(1, keepdim=True)
+        x = (x - u) / torch.sqrt(s + self.eps)
+        x = self.weight.unsqueeze(-1).unsqueeze(-1) * x \
+            + self.bias.unsqueeze(-1).unsqueeze(-1)
+        return x
+
+
 class GroupLiteAttMlp(nn.Module):
     """
     Implementation of MLP with 1*1 convolutions.
@@ -304,6 +348,214 @@ class PartialGroupLiteAttMlp(nn.Module):
         return x
 
 
+class GroupLiteConvMlp(nn.Module):
+    """
+    Implementation of MLP with 1*1 convolutions.
+    Input: tensor with shape [B, C, H, W]
+    """
+    def __init__(self, in_features, hidden_features=None, name='', groups=4, threshold=0, use_cca=False,
+                 out_features=None, act_layer=nn.GELU, drop=0., shift=False):
+        super().__init__()
+        self.in_features = in_features
+        self.shift = shift
+        out_features = out_features or in_features
+        self.scale = hidden_features ** -0.5
+        self.threshold=threshold
+        self.use_cca = True
+        
+        self.weight_soft = nn.Parameter(torch.randn(2))
+        self.softmax = nn.Softmax(0)
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Conv2d(in_features, hidden_features, 1, groups=groups)
+    
+        self.act = act_layer()
+        self.fc2 = nn.Conv2d(hidden_features, out_features, 1, groups=groups)
+        self.aux = nn.Conv2d(in_features, in_features, 1, groups=1)
+        
+        self.k = nn.Identity() #nn.Conv2d(in_features, in_features, 1, groups=in_features)
+        self.v = nn.Identity() #nn.Conv2d(in_features, in_features, 1, groups=in_features)
+    
+        self.drop = nn.Dropout(drop)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        # print(self.weight_soft)
+        weight_soft = self.softmax(self.weight_soft)
+        inp = x
+        sh = x.shape
+        attn = self.aux(inp)
+
+        x = self.fc1(x)
+        # x = self.bn1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        if self.shift:
+            x = torch.roll(x, self.in_features, 1)
+        
+        x = self.fc2(x)
+        # x = self.bn2(x)
+        y = x
+        x = self.drop(x)
+        x = weight_soft[0] * x + weight_soft[1] * attn
+        return x
+
+
+class GCTAttention(nn.Module):
+    def __init__(self,in_planes, groups=1, alpha=3,beta=1,init_weight=True):
+        super().__init__()
+        self.avgpool=nn.AdaptiveAvgPool2d(1)
+        self.weight = nn.Parameter(torch.zeros(1, device='cuda'))
+        self.alpha = alpha
+        self.beta = beta
+    
+      
+        self.net=nn.Sequential(
+            LayerNormChannel(in_planes//groups)
+        )
+
+        if(init_weight):
+            self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            if isinstance(m ,nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self,x):
+        att=self.avgpool(x) #bs,dim,1,1
+        att=self.net(att)
+        var = self.weight * self.alpha + self.beta
+        att = torch.exp(-att**2/(2*var**2))
+        return att
+
+
+class GroupLiteGCTAttMlp(nn.Module):
+    """
+    Implementation of MLP with 1*1 convolutions.
+    Input: tensor with shape [B, C, H, W]
+    """
+    def __init__(self, in_features, hidden_features=None, name='', groups=4, use_cca=False,
+                 out_features=None, act_layer=nn.GELU, drop=0., shift=False):
+        super().__init__()
+        self.in_features = in_features
+        self.shift = shift
+        out_features = out_features or in_features
+        self.scale = in_features ** -0.5
+        self.weight_soft = GCTAttention(in_features)
+        self.softmax = nn.Softmax(0)
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Conv2d(in_features, hidden_features, 1, groups=groups)
+        # self.bn1 = nn.BatchNorm2d(hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Conv2d(hidden_features, out_features, 1, groups=groups)
+        
+        self.k = nn.Identity()
+        self.v = nn.Identity()
+        # self.bn2 = nn.BatchNorm2d(out_features)
+        self.drop = nn.Dropout(drop)
+        # self.proj = nn.Conv2d(2 * in_features, in_features, 1, groups=in_features)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        weight_soft = self.weight_soft(x)
+
+        sh = x.shape
+        # trick here to make q@k.t more stable
+        attn = (x.view(x.size(0), x.size(1), -1) * self.scale) @ self.k(x).reshape(x.size(0), -1, x.size(1))
+        # attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        # attn = self.attn_drop(attn)
+
+        attn = (attn @ self.v(x).view(x.size(0), x.size(1), -1)).view(sh[0], sh[1], sh[2], sh[3])
+        
+        x = self.fc1(x)
+        # x = self.bn1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        if self.shift:
+            x = torch.roll(x, self.in_features, 1)
+        
+        x = self.fc2(x)
+        # x = self.bn2(x)
+        y = x
+        x = self.drop(x)
+        # x = torch.cat((x, attn), 1)
+        # x = torch.cat((weight_soft[0] * x, weight_soft[1] * attn), 1)
+        # x = self.proj(x)
+        x = weight_soft * x + (1 - weight_soft) * attn
+        return x
+
+
+class GroupLiteSEMlp(nn.Module):
+    """
+    Implementation of MLP with 1*1 convolutions.
+    Input: tensor with shape [B, C, H, W]
+    """
+    def __init__(self, in_features, hidden_features=None, name='', groups=4, use_cca=False,
+                 out_features=None, act_layer=nn.GELU, drop=0., shift=False):
+        super().__init__()
+        self.in_features = in_features
+        self.shift = shift
+        out_features = out_features or in_features
+        self.scale = hidden_features ** -0.5
+        
+        self.weight_soft = nn.Parameter(torch.randn(2))
+        self.softmax = nn.Softmax(0)
+       
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Conv2d(in_features, hidden_features, 1, groups=groups)
+    
+        self.act = act_layer()
+        self.fc2 = nn.Conv2d(hidden_features, out_features, 1, groups=groups)
+        self.aux = SELayer(in_features) 
+       
+        self.drop = nn.Dropout(drop)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        weight_soft = self.softmax(self.weight_soft)
+
+        sh = x.shape
+        attn = self.aux(x)
+
+        x = self.fc1(x)
+        # x = self.bn1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        if self.shift:
+            x = torch.roll(x, self.in_features, 1)
+        
+        x = self.fc2(x)
+        # x = self.bn2(x)
+        y = x
+        x = self.drop(x)
+        x = weight_soft[0] * x + weight_soft[1] * attn
+        return x
+
+
 class GroupConnectAttnMlp(nn.Module):
     """
     Implementation of MLP with 1*1 convolutions.
@@ -385,4 +637,83 @@ class GroupConnectAttnMlp(nn.Module):
         x = weight_soft[:, 0].view(-1, 1, 1, 1) * x + weight_soft[:, 1].view(-1, 1, 1, 1) * attn
         x = self.drop(x)
         
+        return x
+
+
+class ShuffleBlock(nn.Module):
+  def __init__(self, groups):
+    super(ShuffleBlock, self).__init__()
+    self.groups = groups
+  def forward(self, x):
+    N,C,H,W = x.size()
+    g = self.groups
+    return x.view(N, g, C//g, H, W).permute(0, 2, 1, 3, 4).reshape(N, C, H, W)
+
+
+class ShuffleGroupLiteAttMlp(nn.Module):
+    """
+    Implementation of MLP with 1*1 convolutions.
+    Input: tensor with shape [B, C, H, W]
+    """
+    def __init__(self, in_features, hidden_features=None, name='', groups=4, use_cca=False,
+                 out_features=None, act_layer=nn.GELU, drop=0., shift=False):
+        super().__init__()
+        self.in_features = in_features
+        self.shift = shift
+        out_features = out_features or in_features
+        self.scale = hidden_features ** -0.5
+
+        self.channel_shuffle = ShuffleBlock(groups)
+        
+        self.weight_soft = nn.Parameter(torch.randn(2))
+        self.softmax = nn.Softmax(0)
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Conv2d(in_features, hidden_features, 1, groups=groups)
+    
+        self.act = act_layer()
+        self.fc2 = nn.Conv2d(hidden_features, out_features, 1, groups=groups)
+        
+        self.k = nn.Identity() #nn.Conv2d(in_features, in_features, 1, groups=in_features)
+        self.v = nn.Identity() #nn.Conv2d(in_features, in_features, 1, groups=in_features)
+    
+        self.drop = nn.Dropout(drop)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+
+        if self.training:
+            weight_soft = self.softmax(self.weight_soft)
+
+            # x = self.channel_shuffle(x)
+
+            sh = x.shape
+            # trick here to make q@k.t more stable
+            attn = (x.view(x.size(0), x.size(1), -1) * self.scale) @ self.k(x).reshape(x.size(0), -1, x.size(1))
+            # attn = (q @ k.transpose(-2, -1)) * self.scale
+            attn = attn.softmax(dim=-1)
+            # attn = self.attn_drop(attn)
+
+            attn = (attn @ self.v(x).view(x.size(0), x.size(1), -1)).view(sh[0], sh[1], sh[2], sh[3])
+        
+        x = self.fc1(x)
+        # x = self.bn1(x)
+        x = self.act(x)
+        x = self.channel_shuffle(x)
+        x = self.drop(x)
+        if self.shift:
+            x = torch.roll(x, self.in_features, 1)
+        
+        x = self.fc2(x)
+        # x = self.bn2(x)
+        y = x
+        x = self.drop(x)
+        if self.training:
+            x = weight_soft[0] * x + weight_soft[1] * attn
+        # print(weight_soft[1])
         return x

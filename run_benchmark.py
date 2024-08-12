@@ -1,14 +1,15 @@
-import metaformer_baselines
+import schemeformer
 from timm.models import create_model
 from misc_utils.benchmark import main
 
-
 benchmark_list = {
-  # "caformer_s18": 224,
-  # "featcaformer_s18": 224,
-  # "featpartialcaformer_s18": 224,
-  # "featpartialcaformer_s14": 224,
-  "featpartialcaformer_s12": 224,
+    "schemeformer_ppaa_s12_224": 224,
+    "schemeformer_ppaa_s36_224": 224,
+    "grouporgsemlpformer_ppaa_s12_224": 224,
+    # "shufflegrouporgattnmlpformer_ppaa_s12_224": 224,
+    # "groupliteconvmlpformer_ppaa_s12_224": 224,
+    # "groupliteattnmlpformer_ppaa_s12_224": 224,
+
 }
 
 def get_benchmark():

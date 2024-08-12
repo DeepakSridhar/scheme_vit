@@ -1,12 +1,10 @@
-# FeatAttention MLP Mixer
-
-## Reference: [MetaFormer Baselines for Vision](https://arxiv.org/abs/2210.13452)
+# Scheme MLP Mixer
 
 
 ## Installation
 Install anaconda on your server and then install conda environment using the provided yml file in other branch
 ```bash
-conda env create -f attentionvitenv.yml
+conda create -n python=3.8
 ```
 
 ## Requirements
@@ -32,12 +30,19 @@ Data preparation: ImageNet with the following folder structure, you can extract 
 ```
 
 
+## Inference Speed
+To evaluate the inference speed of the models
+
+```bash
+python run_benchmark.py 
+```
+
 ## Validation
 
 To evaluate CAFormer-S18 models, run:
 
 ```bash
-MODEL=featcaformer_s18
+MODEL=schemeformer_ppaa_s12_224
 python3 validate.py /path/to/imagenet  --model $MODEL -b 128 \
   --checkpoint /path/to/checkpoint 
 ```
