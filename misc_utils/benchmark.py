@@ -121,10 +121,10 @@ def main(model=None) -> None:
 
     torch.cuda.synchronize()
 
-    print("Measuring FLOPs")
-    flops = FlopCountAnalysis(model, input_tensor)
+    # print("Measuring FLOPs")
+    # flops = FlopCountAnalysis(model, input_tensor)
     # print(f"Total FLOPs: {flops.total()/1e9} G")
-    print(flop_count_table(flops))
+    # print(flop_count_table(flops))
 
     # print("Latency Measurement Using CPU Timer...")
     # for continuous_measure in [True, False]:
@@ -187,6 +187,7 @@ def main(model=None) -> None:
     profile_result = timer.timeit(num_repeats)
     # https://pytorch.org/docs/stable/_modules/torch/utils/benchmark/utils/common.html#Measurement
     print(f"Latency: {profile_result.mean * 1000:.5f} ms")
+    print(f"Throughput: {1 / (profile_result.mean):.5f} images/sec")
 
 
 if __name__ == "__main__":
